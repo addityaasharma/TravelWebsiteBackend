@@ -82,7 +82,7 @@ def signup():
             token,
             httponly=True,
             secure=False,
-            samesite="None",
+            samesite="Lax",
             max_age=7 * 24 * 60 * 60,
         )
 
@@ -146,7 +146,7 @@ def login():
             token,
             httponly=True,
             secure=True,
-            samesite="Strict",
+            samesite="Lax",
             max_age=7 * 24 * 60 * 60,
         )
 
