@@ -145,7 +145,7 @@ def login():
             "user_auth_token",
             token,
             httponly=True,
-            secure=True,
+            secure=False,
             samesite="Lax",
             max_age=7 * 24 * 60 * 60,
         )
