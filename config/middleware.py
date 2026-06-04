@@ -16,7 +16,7 @@ def middleware(f):
         try:
             decoded = jwt.decode(token, os.getenv("SECRET_KEY"), algorithms=["HS256"])
 
-            user = User.query.get(decoded["userID"])
+            user = Admin.query.get(decoded["userID"])
             if not user:
                 return jsonify({"status": "error", "message": "User not found"}), 404
 
