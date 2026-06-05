@@ -85,7 +85,7 @@ class Package(db.Model):
         back_populates="package",
         cascade="all, delete-orphan",
     )
-    forms = db.relationship("Form", uselist=True, lazy=True, back_populates="package" cascade="all, delete-orphan")
+    forms = db.relationship("Form", uselist=True, lazy=True, back_populates="package", cascade="all, delete-orphan")
 
 
 class PackageDays(db.Model):
