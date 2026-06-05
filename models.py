@@ -21,12 +21,13 @@ class Banner(db.Model):
 class Form(db.Model):
     __tablename__ = "form"
     id = db.Column(db.Integer, primary_key=True)
-    package_id = db.Column(db.Integer,db.ForeignKey("package.id"), nullable=False)
+    package_id = db.Column(db.Integer,db.ForeignKey("package.id",ondelete="CASCADE"), nullable=False)
     package_details = db.Column(db.Text, nullable=False)
     full_name = db.Column(db.String(255), nullable=False)
     email = db.Column(db.String(255))
     phoneNumber = db.Column(db.String(20), nullable=False)
     message = db.Column(db.String(255))
+    package = db.relationship("Package", back_populates="forms")
 
 
 class Country(db.Model):
@@ -84,6 +85,7 @@ class Package(db.Model):
         back_populates="package",
         cascade="all, delete-orphan",
     )
+    forms = db.relationship("Form", uselist=True, lazy=True, back_populates="package" cascade="all, delete-orphan")
 
 
 class PackageDays(db.Model):
