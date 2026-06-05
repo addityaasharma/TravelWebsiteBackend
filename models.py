@@ -9,7 +9,7 @@ class Admin(db.Model):
     email = db.Column(db.String(255), nullable=False)
     password = db.Column(db.String(255), nullable=False)
     phoneNumber = db.Column(db.String(20))
-    
+
 
 class Banner(db.Model):
     __tablename__ = "banner"
@@ -21,7 +21,9 @@ class Banner(db.Model):
 class Form(db.Model):
     __tablename__ = "form"
     id = db.Column(db.Integer, primary_key=True)
-    package_id = db.Column(db.Integer,db.ForeignKey("package.id",ondelete="CASCADE"), nullable=False)
+    package_id = db.Column(
+        db.Integer, db.ForeignKey("package.id", ondelete="CASCADE"), nullable=False
+    )
     package_details = db.Column(db.Text, nullable=False)
     full_name = db.Column(db.String(255), nullable=False)
     email = db.Column(db.String(255))
@@ -48,6 +50,8 @@ class PackageCollection(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     country_id = db.Column(db.Integer, db.ForeignKey("country.id"), nullable=True)
     name = db.Column(db.String(255), nullable=False)
+    show_on_home = db.Column(db.Boolean(), nullable=True, default=False)
+    home_index = db.Column(db.Integer, nullable=True, default=0)
     description = db.Column(db.Text)
     image = db.Column(db.String(255), nullable=False)
     country = db.relationship("Country", back_populates="package_collections")
@@ -85,7 +89,13 @@ class Package(db.Model):
         back_populates="package",
         cascade="all, delete-orphan",
     )
-    forms = db.relationship("Form", uselist=True, lazy=True, back_populates="package", cascade="all, delete-orphan")
+    forms = db.relationship(
+        "Form",
+        uselist=True,
+        lazy=True,
+        back_populates="package",
+        cascade="all, delete-orphan",
+    )
 
 
 class PackageDays(db.Model):

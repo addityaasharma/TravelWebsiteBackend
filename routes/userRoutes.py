@@ -539,3 +539,70 @@ def get_banners_public():
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@userBP.route("/home", methods=["GET"])
+def home():
+    try:
+        collections = (
+            PackageCollection.query.filter_by(show_on_home=True)
+            .order_by(PackageCollection.home_index)
+            .all()
+        )
+
+        result = []
+        for collection in collections:
+            packages_data = []
+            for pkg in collection.packages[:6]:
+                # Calculate average star rating
+                avg_rating = 0
+                if pkg.reviews:
+                    avg_rating = round(
+                        sum(r.star for r in pkg.reviews) / len(pkg.reviews), 1
+                    )
+
+                packages_data.append(
+                    {
+                        "id": pkg.id,
+                        "name": pkg.name,
+                        "description": pkg.description,
+                        "total_price": pkg.total_price,
+                        "discount_price": pkg.discount_price,
+                        "person": pkg.person,
+                        "image": pkg.image,
+                        "average_rating": avg_rating,
+                        "total_reviews": len(pkg.reviews),
+                        "days": [
+                            {
+                                "id": d.id,
+                                "days": d.days,
+                                "price": d.price,
+                                "discount_price": d.discount_price,
+                            }
+                            for d in pkg.days
+                        ],
+                    }
+                )
+
+            result.append(
+                {
+                    "id": collection.id,
+                    "name": collection.name,
+                    "description": collection.description,
+                    "image": collection.image,
+                    "country_id": collection.country_id,
+                    "home_index": collection.home_index,
+                    "total_packages": len(collection.packages),
+                    "packages": packages_data,
+                }
+            )
+
+        return jsonify({"status": "success", "data": result}), 200
+
+    except Exception as e:
+        return (
+            jsonify(
+                {"status": "error", "message": "Failed to fetch home", "error": str(e)}
+            ),
+            500,
+        )
