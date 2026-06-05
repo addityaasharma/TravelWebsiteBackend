@@ -156,6 +156,23 @@ def login():
         return jsonify({"status": "error", "message": "Failed to login"}), 500
 
 
+@adminBP.route("/logout", methods=["POST"])
+@middleware
+def logout():
+    try:
+        response = jsonify({"status": "success", "message": "Logged out successfully"})
+        response.delete_cookie(
+            "user_auth_token",
+            httponly=True,
+            secure=False,
+            samesite="Lax",
+        )
+        return response, 200
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @adminBP.route("/", methods=["GET"])
 @middleware
 def get_admin():

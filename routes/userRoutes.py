@@ -606,3 +606,79 @@ def home():
             ),
             500,
         )
+
+
+@userBP.route('/packages/<int:package_id>/suggested', methods=['GET'])
+def get_suggested_packages(package_id):
+    try:
+        package = Package.query.get(package_id)
+        if not package:
+            return jsonify({"status": "error", "message": "Package not found"}), 404
+
+        suggested = []
+
+        # 1. Same collection, excluding current package
+        same_collection = Package.query.filter(
+            Package.package_collection_id == package.package_collection_id,
+            Package.id != package_id
+        ).limit(16).all()
+
+        suggested_ids = {p.id for p in same_collection}
+        suggested.extend(same_collection)
+
+        # 2. If still under 16, fill from same country via collection
+        if len(suggested) < 16:
+            same_country = Package.query.join(
+                PackageCollection, Package.package_collection_id == PackageCollection.id
+            ).filter(
+                PackageCollection.country_id == package.package_collection.country_id,
+                Package.id != package_id,
+                Package.id.notin_(suggested_ids)
+            ).limit(16 - len(suggested)).all()
+
+            for p in same_country:
+                suggested_ids.add(p.id)
+            suggested.extend(same_country)
+
+        # 3. Still under 16 — fill with any other packages
+        if len(suggested) < 16:
+            others = Package.query.filter(
+                Package.id != package_id,
+                Package.id.notin_(suggested_ids)
+            ).limit(16 - len(suggested)).all()
+
+            suggested.extend(others)
+
+        def format_package(p):
+            avg_rating = 0
+            if p.reviews:
+                avg_rating = round(sum(r.star for r in p.reviews) / len(p.reviews), 1)
+            return {
+                "id": p.id,
+                "name": p.name,
+                "description": p.description,
+                "total_price": p.total_price,
+                "discount_price": p.discount_price,
+                "person": p.person,
+                "image": p.image,
+                "average_rating": avg_rating,
+                "total_reviews": len(p.reviews),
+                "package_collection_id": p.package_collection_id,
+                "days": [
+                    {
+                        "id": d.id,
+                        "days": d.days,
+                        "price": d.price,
+                        "discount_price": d.discount_price,
+                    }
+                    for d in p.days
+                ],
+            }
+
+        return jsonify({
+            "status": "success",
+            "data": [format_package(p) for p in suggested[:16]]
+        }), 200
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
