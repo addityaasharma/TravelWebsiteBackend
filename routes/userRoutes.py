@@ -90,9 +90,82 @@ def get_collections():
                             "image": c.image,
                             "country_id": c.country_id,
                             "total_packages": len(c.packages),
+                            "packages": [
+                                {
+                                    "id": p.id,
+                                    "name": p.name,
+                                    "description": p.description,
+                                    "total_price": p.total_price,
+                                    "discount_price": p.discount_price,
+                                    "person": p.person,
+                                    "image": p.image,
+                                    "total_days": len(p.days),
+                                    "average_rating": (
+                                        round(
+                                            sum(r.star for r in p.reviews)
+                                            / len(p.reviews),
+                                            1,
+                                        )
+                                        if p.reviews
+                                        else 0
+                                    ),
+                                    "total_reviews": len(p.reviews),
+                                }
+                                for p in c.packages
+                            ],
                         }
                         for c in collections
                     ],
+                }
+            ),
+            200,
+        )
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@userBP.route("/collections/<int:id>", methods=["GET"])
+def get_collection(id):
+    try:
+        c = PackageCollection.query.get(id)
+        if not c:
+            return jsonify({"status": "error", "message": "Collection not found"}), 404
+
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "data": {
+                        "id": c.id,
+                        "name": c.name,
+                        "description": c.description,
+                        "image": c.image,
+                        "country_id": c.country_id,
+                        "total_packages": len(c.packages),
+                        "packages": [
+                            {
+                                "id": p.id,
+                                "name": p.name,
+                                "description": p.description,
+                                "total_price": p.total_price,
+                                "discount_price": p.discount_price,
+                                "person": p.person,
+                                "image": p.image,
+                                "total_days": len(p.days),
+                                "average_rating": (
+                                    round(
+                                        sum(r.star for r in p.reviews) / len(p.reviews),
+                                        1,
+                                    )
+                                    if p.reviews
+                                    else 0
+                                ),
+                                "total_reviews": len(p.reviews),
+                            }
+                            for p in c.packages
+                        ],
+                    },
                 }
             ),
             200,
@@ -608,7 +681,7 @@ def home():
         )
 
 
-@userBP.route('/packages/<int:package_id>/suggested', methods=['GET'])
+@userBP.route("/packages/<int:package_id>/suggested", methods=["GET"])
 def get_suggested_packages(package_id):
     try:
         package = Package.query.get(package_id)
@@ -618,23 +691,34 @@ def get_suggested_packages(package_id):
         suggested = []
 
         # 1. Same collection, excluding current package
-        same_collection = Package.query.filter(
-            Package.package_collection_id == package.package_collection_id,
-            Package.id != package_id
-        ).limit(16).all()
+        same_collection = (
+            Package.query.filter(
+                Package.package_collection_id == package.package_collection_id,
+                Package.id != package_id,
+            )
+            .limit(16)
+            .all()
+        )
 
         suggested_ids = {p.id for p in same_collection}
         suggested.extend(same_collection)
 
         # 2. If still under 16, fill from same country via collection
         if len(suggested) < 16:
-            same_country = Package.query.join(
-                PackageCollection, Package.package_collection_id == PackageCollection.id
-            ).filter(
-                PackageCollection.country_id == package.package_collection.country_id,
-                Package.id != package_id,
-                Package.id.notin_(suggested_ids)
-            ).limit(16 - len(suggested)).all()
+            same_country = (
+                Package.query.join(
+                    PackageCollection,
+                    Package.package_collection_id == PackageCollection.id,
+                )
+                .filter(
+                    PackageCollection.country_id
+                    == package.package_collection.country_id,
+                    Package.id != package_id,
+                    Package.id.notin_(suggested_ids),
+                )
+                .limit(16 - len(suggested))
+                .all()
+            )
 
             for p in same_country:
                 suggested_ids.add(p.id)
@@ -642,10 +726,13 @@ def get_suggested_packages(package_id):
 
         # 3. Still under 16 — fill with any other packages
         if len(suggested) < 16:
-            others = Package.query.filter(
-                Package.id != package_id,
-                Package.id.notin_(suggested_ids)
-            ).limit(16 - len(suggested)).all()
+            others = (
+                Package.query.filter(
+                    Package.id != package_id, Package.id.notin_(suggested_ids)
+                )
+                .limit(16 - len(suggested))
+                .all()
+            )
 
             suggested.extend(others)
 
@@ -675,10 +762,15 @@ def get_suggested_packages(package_id):
                 ],
             }
 
-        return jsonify({
-            "status": "success",
-            "data": [format_package(p) for p in suggested[:16]]
-        }), 200
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "data": [format_package(p) for p in suggested[:16]],
+                }
+            ),
+            200,
+        )
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
