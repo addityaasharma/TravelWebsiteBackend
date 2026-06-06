@@ -35,7 +35,6 @@ def get_countries():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# GET single country with its package collections
 @userBP.route("/countries/<int:country_id>", methods=["GET"])
 def get_country(country_id):
     try:
@@ -59,6 +58,29 @@ def get_country(country_id):
                                 "description": c.description,
                                 "image": c.image,
                                 "total_packages": len(c.packages),
+                                "packages": [
+                                    {
+                                        "id": p.id,
+                                        "name": p.name,
+                                        "description": p.description,
+                                        "total_price": p.total_price,
+                                        "discount_price": p.discount_price,
+                                        "person": p.person,
+                                        "image": p.image,
+                                        "total_days": len(p.days),
+                                        "average_rating": (
+                                            round(
+                                                sum(r.star for r in p.reviews)
+                                                / len(p.reviews),
+                                                1,
+                                            )
+                                            if p.reviews
+                                            else 0
+                                        ),
+                                        "total_reviews": len(p.reviews),
+                                    }
+                                    for p in c.packages
+                                ],
                             }
                             for c in country.package_collections
                         ],
