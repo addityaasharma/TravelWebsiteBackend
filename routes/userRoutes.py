@@ -147,56 +147,6 @@ def get_collections():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@userBP.route("/collections/<int:id>", methods=["GET"])
-def get_collection(id):
-    try:
-        c = PackageCollection.query.get(id)
-        if not c:
-            return jsonify({"status": "error", "message": "Collection not found"}), 404
-
-        return (
-            jsonify(
-                {
-                    "status": "success",
-                    "data": {
-                        "id": c.id,
-                        "name": c.name,
-                        "description": c.description,
-                        "image": c.image,
-                        "country_id": c.country_id,
-                        "total_packages": len(c.packages),
-                        "packages": [
-                            {
-                                "id": p.id,
-                                "name": p.name,
-                                "description": p.description,
-                                "total_price": p.total_price,
-                                "discount_price": p.discount_price,
-                                "person": p.person,
-                                "image": p.image,
-                                "total_days": len(p.days),
-                                "average_rating": (
-                                    round(
-                                        sum(r.star for r in p.reviews) / len(p.reviews),
-                                        1,
-                                    )
-                                    if p.reviews
-                                    else 0
-                                ),
-                                "total_reviews": len(p.reviews),
-                            }
-                            for p in c.packages
-                        ],
-                    },
-                }
-            ),
-            200,
-        )
-
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-
 # GET single package collection with full package details
 @userBP.route("/collections/<int:collection_id>", methods=["GET"])
 def get_collection(collection_id):
