@@ -279,54 +279,6 @@ def update_admin():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@adminBP.route("/country", methods=["POST"])
-@middleware
-def create_country():
-    try:
-        name = request.form.get("name")
-        description = request.form.get("description")
-        image_file = request.files.get("image")
-
-        if not name:
-            return jsonify({"status": "error", "message": "Name is required"}), 400
-
-        if not image_file:
-            return jsonify({"status": "error", "message": "Image is required"}), 400
-
-        uploaded, error = upload_images(image_file, folder="countries")
-        if error:
-            return jsonify({"status": "error", "message": error}), 400
-
-        country = Country(
-            name=name,
-            description=description,
-            image=uploaded[0]["url"],
-        )
-
-        db.session.add(country)
-        db.session.commit()
-
-        return (
-            jsonify(
-                {
-                    "status": "success",
-                    "message": "Country created successfully",
-                    "data": {
-                        "id": country.id,
-                        "name": country.name,
-                        "description": country.description,
-                        "image": country.image,
-                    },
-                }
-            ),
-            201,
-        )
-
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-
 @adminBP.route("/country", methods=["GET"])
 @middleware
 def get_countries():
@@ -354,6 +306,124 @@ def get_countries():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+@adminBP.route("/country", methods=["POST"])
+@middleware
+def create_country():
+    try:
+        name = request.form.get("name")
+        description = request.form.get("description")
+        image_file = request.files.get("image")
+
+        if not name:
+            return jsonify({"status": "error", "message": "Name is required"}), 400
+
+        if not image_file:
+            return jsonify({"status": "error", "message": "Image is required"}), 400
+
+        uploaded, error = upload_images(image_file, folder="countries")
+        if error:
+            return jsonify({"status": "error", "message": error}), 400
+
+        country = Country(
+            name=name,
+            description=description,
+            image=uploaded[0]["url"],
+        )
+        db.session.add(country)
+        db.session.flush()  # get country.id before committing
+
+        collection_names = request.form.getlist("collection_names[]")
+        collection_descriptions = request.form.getlist("collection_descriptions[]")
+        collection_show_on_home = request.form.getlist("collection_show_on_home[]")
+        collection_home_indexes = request.form.getlist("collection_home_indexes[]")
+        collection_image_files = request.files.getlist("collection_images[]")
+
+        created_collections = []
+        for i, col_name in enumerate(collection_names):
+            if not col_name.strip():
+                continue
+
+            col_image_url = None
+            if i < len(collection_image_files) and collection_image_files[i].filename:
+                col_uploaded, col_error = upload_images(
+                    collection_image_files[i], folder="package-collections"
+                )
+                if col_error:
+                    db.session.rollback()
+                    return (
+                        jsonify(
+                            {
+                                "status": "error",
+                                "message": f"Collection image error: {col_error}",
+                            }
+                        ),
+                        400,
+                    )
+                col_image_url = col_uploaded[0]["url"]
+
+            show_home = (
+                collection_show_on_home[i].lower() == "true"
+                if i < len(collection_show_on_home)
+                else False
+            )
+            try:
+                home_idx = (
+                    int(collection_home_indexes[i])
+                    if i < len(collection_home_indexes)
+                    else 0
+                )
+            except (ValueError, TypeError):
+                home_idx = 0
+
+            col = PackageCollection(
+                country_id=country.id,
+                name=col_name.strip(),
+                description=(
+                    collection_descriptions[i].strip()
+                    if i < len(collection_descriptions)
+                    else ""
+                ),
+                image=col_image_url or "",
+                show_on_home=show_home,
+                home_index=home_idx,
+            )
+            db.session.add(col)
+            created_collections.append(col)
+
+        db.session.commit()
+
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "message": "Country created successfully",
+                    "data": {
+                        "id": country.id,
+                        "name": country.name,
+                        "description": country.description,
+                        "image": country.image,
+                        "package_collections": [
+                            {
+                                "id": c.id,
+                                "name": c.name,
+                                "description": c.description,
+                                "image": c.image,
+                                "show_on_home": c.show_on_home,
+                                "home_index": c.home_index,
+                            }
+                            for c in created_collections
+                        ],
+                    },
+                }
+            ),
+            201,
+        )
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @adminBP.route("/country/<int:country_id>", methods=["GET"])
 @middleware
 def get_country(country_id):
@@ -371,6 +441,18 @@ def get_country(country_id):
                         "name": country.name,
                         "description": country.description,
                         "image": country.image,
+                        "package_collections": [
+                            {
+                                "id": c.id,
+                                "name": c.name,
+                                "description": c.description,
+                                "image": c.image,
+                                "show_on_home": c.show_on_home,
+                                "home_index": c.home_index,
+                                "total_packages": len(c.packages),
+                            }
+                            for c in country.package_collections
+                        ],
                     },
                 }
             ),
@@ -395,22 +477,124 @@ def edit_country(country_id):
 
         if name:
             country.name = name
-
         if description is not None:
             country.description = description
-
         if image_file:
             if country.image:
                 public_id = "/".join(country.image.split("/")[-2:]).rsplit(".", 1)[0]
                 delete_images({"public_id": public_id})
-
             uploaded, error = upload_images(image_file, folder="countries")
             if error:
                 return jsonify({"status": "error", "message": error}), 400
-
             country.image = uploaded[0]["url"]
 
+        new_names = request.form.getlist("new_collection_names[]")
+        new_descriptions = request.form.getlist("new_collection_descriptions[]")
+        new_show_on_home = request.form.getlist("new_collection_show_on_home[]")
+        new_home_indexes = request.form.getlist("new_collection_home_indexes[]")
+        new_image_files = request.files.getlist("new_collection_images[]")
+
+        for i, col_name in enumerate(new_names):
+            if not col_name.strip():
+                continue
+
+            col_image_url = None
+            if i < len(new_image_files) and new_image_files[i].filename:
+                col_uploaded, col_error = upload_images(
+                    new_image_files[i], folder="package-collections"
+                )
+                if col_error:
+                    db.session.rollback()
+                    return (
+                        jsonify(
+                            {
+                                "status": "error",
+                                "message": f"Collection image error: {col_error}",
+                            }
+                        ),
+                        400,
+                    )
+                col_image_url = col_uploaded[0]["url"]
+
+            show_home = (
+                new_show_on_home[i].lower() == "true"
+                if i < len(new_show_on_home)
+                else False
+            )
+            try:
+                home_idx = int(new_home_indexes[i]) if i < len(new_home_indexes) else 0
+            except (ValueError, TypeError):
+                home_idx = 0
+
+            col = PackageCollection(
+                country_id=country.id,
+                name=col_name.strip(),
+                description=(
+                    new_descriptions[i].strip() if i < len(new_descriptions) else ""
+                ),
+                image=col_image_url or "",
+                show_on_home=show_home,
+                home_index=home_idx,
+            )
+            db.session.add(col)
+
+        update_ids = request.form.getlist("update_collection_ids[]")
+        update_names = request.form.getlist("update_collection_names[]")
+        update_descriptions = request.form.getlist("update_collection_descriptions[]")
+        update_image_files = request.files.getlist("update_collection_images[]")
+
+        for i, col_id_str in enumerate(update_ids):
+            try:
+                col_id = int(col_id_str)
+            except (ValueError, TypeError):
+                continue
+
+            col = PackageCollection.query.get(col_id)
+            if not col or col.country_id != country.id:
+                continue
+
+            if i < len(update_names) and update_names[i].strip():
+                col.name = update_names[i].strip()
+            if i < len(update_descriptions):
+                col.description = update_descriptions[i].strip()
+            if i < len(update_image_files) and update_image_files[i].filename:
+                if col.image:
+                    old_pid = "/".join(col.image.split("/")[-2:]).rsplit(".", 1)[0]
+                    delete_images({"public_id": old_pid})
+                col_uploaded, col_error = upload_images(
+                    update_image_files[i], folder="package-collections"
+                )
+                if col_error:
+                    db.session.rollback()
+                    return (
+                        jsonify(
+                            {
+                                "status": "error",
+                                "message": f"Collection image error: {col_error}",
+                            }
+                        ),
+                        400,
+                    )
+                col.image = col_uploaded[0]["url"]
+
+        remove_ids = request.form.getlist("remove_collection_ids[]")
+        for col_id_str in remove_ids:
+            try:
+                col_id = int(col_id_str)
+            except (ValueError, TypeError):
+                continue
+            col = PackageCollection.query.get(col_id)
+            if col and col.country_id == country.id:
+                if col.image:
+                    old_pid = "/".join(col.image.split("/")[-2:]).rsplit(".", 1)[0]
+                    delete_images({"public_id": old_pid})
+                db.session.delete(col)
+
         db.session.commit()
+
+        updated_collections = PackageCollection.query.filter_by(
+            country_id=country.id
+        ).all()
 
         return (
             jsonify(
@@ -422,6 +606,18 @@ def edit_country(country_id):
                         "name": country.name,
                         "description": country.description,
                         "image": country.image,
+                        "package_collections": [
+                            {
+                                "id": c.id,
+                                "name": c.name,
+                                "description": c.description,
+                                "image": c.image,
+                                "show_on_home": c.show_on_home,
+                                "home_index": c.home_index,
+                                "total_packages": len(c.packages),
+                            }
+                            for c in updated_collections
+                        ],
                     },
                 }
             ),
@@ -441,6 +637,11 @@ def delete_country(country_id):
         if not country:
             return jsonify({"status": "error", "message": "Country not found"}), 404
 
+        for col in country.package_collections:
+            if col.image:
+                col_pid = "/".join(col.image.split("/")[-2:]).rsplit(".", 1)[0]
+                delete_images({"public_id": col_pid})
+
         if country.image:
             public_id = "/".join(country.image.split("/")[-2:]).rsplit(".", 1)[0]
             delete_images({"public_id": public_id})
@@ -449,12 +650,7 @@ def delete_country(country_id):
         db.session.commit()
 
         return (
-            jsonify(
-                {
-                    "status": "success",
-                    "message": "Country deleted successfully",
-                }
-            ),
+            jsonify({"status": "success", "message": "Country deleted successfully"}),
             200,
         )
 
