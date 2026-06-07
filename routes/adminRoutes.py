@@ -730,12 +730,51 @@ def create_package_collection():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# GET all package collections
 @adminBP.route("/package-collection", methods=["GET"])
 @middleware
 def get_package_collections():
     try:
-        collections = PackageCollection.query.all()
+        page = request.args.get("page", 1, type=int)
+        per_page = min(request.args.get("per_page", 10, type=int), 100)
+        search = request.args.get("search", "").strip()
+        country_id = request.args.get("country_id", type=int)  # filter by country
+        show_on_home = request.args.get("show_on_home")  # "true" | "false"
+        sort_by = request.args.get("sort_by", "id")  # id | name | home_index
+        order = request.args.get("order", "desc")  # asc | desc
+        no_country = request.args.get("no_country")  # "true" → unlinked only
+
+        query = PackageCollection.query
+
+        if search:
+            query = query.filter(
+                db.or_(
+                    PackageCollection.name.ilike(f"%{search}%"),
+                    PackageCollection.description.ilike(f"%{search}%"),
+                )
+            )
+
+        if country_id is not None:
+            query = query.filter(PackageCollection.country_id == country_id)
+
+        if no_country and no_country.lower() == "true":
+            query = query.filter(PackageCollection.country_id.is_(None))
+
+        if show_on_home is not None:
+            query = query.filter(
+                PackageCollection.show_on_home == (show_on_home.lower() == "true")
+            )
+
+        sort_column_map = {
+            "id": PackageCollection.id,
+            "name": PackageCollection.name,
+            "home_index": PackageCollection.home_index,
+        }
+        sort_col = sort_column_map.get(sort_by, PackageCollection.id)
+        query = query.order_by(sort_col.asc() if order == "asc" else sort_col.desc())
+
+        total = query.count()
+        collections = query.offset((page - 1) * per_page).limit(per_page).all()
+
         return (
             jsonify(
                 {
@@ -749,6 +788,7 @@ def get_package_collections():
                             "country_id": c.country_id,
                             "show_on_home": c.show_on_home,
                             "home_index": c.home_index,
+                            "total_packages": len(c.packages),
                             "packages": [
                                 {
                                     "id": p.id,
@@ -763,6 +803,14 @@ def get_package_collections():
                         }
                         for c in collections
                     ],
+                    "pagination": {
+                        "page": page,
+                        "per_page": per_page,
+                        "total": total,
+                        "pages": (total + per_page - 1) // per_page,
+                        "has_prev": page > 1,
+                        "has_next": page * per_page < total,
+                    },
                 }
             ),
             200,
@@ -772,65 +820,6 @@ def get_package_collections():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# ── IMPORTANT: bulk-delete MUST come before /<int:collection_id> routes ──
-# DELETE multiple package collections
-@adminBP.route("/package-collection/bulk-delete", methods=["DELETE"])
-@middleware
-def delete_package_collections():
-    try:
-        data = request.get_json()
-        collection_ids = data.get("collection_ids", [])
-
-        if not collection_ids or not isinstance(collection_ids, list):
-            return (
-                jsonify(
-                    {
-                        "status": "error",
-                        "message": "collection_ids must be a non-empty list",
-                    }
-                ),
-                400,
-            )
-
-        deleted, not_found = [], []
-
-        for cid in collection_ids:
-            collection = PackageCollection.query.get(cid)
-            if not collection:
-                not_found.append(cid)
-                continue
-
-            if collection.image:
-                public_id = "/".join(collection.image.split("/")[-2:]).rsplit(".", 1)[0]
-                delete_images({"public_id": public_id})
-
-            for package in collection.packages:
-                if package.image:
-                    delete_images(package.image, folder="packages")
-
-            db.session.delete(collection)
-            deleted.append(cid)
-
-        db.session.commit()
-
-        return (
-            jsonify(
-                {
-                    "status": "success",
-                    "message": f"{len(deleted)} collection(s) deleted successfully",
-                    "deleted": deleted,
-                    "not_found": not_found,
-                }
-            ),
-            200,
-        )
-
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-
-# GET single package collection
 @adminBP.route("/package-collection/<int:collection_id>", methods=["GET"])
 @middleware
 def get_package_collection(collection_id):
@@ -910,59 +899,42 @@ def get_package_collection(collection_id):
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# PUT edit package collection
-@adminBP.route("/package-collection/<int:collection_id>", methods=["PUT"])
+@adminBP.route("/package-collection/bulk-delete", methods=["DELETE"])
 @middleware
-def edit_package_collection(collection_id):
+def delete_package_collections():
     try:
-        collection = PackageCollection.query.get(collection_id)
-        if not collection:
+        data = request.get_json()
+        collection_ids = data.get("collection_ids", [])
+
+        if not collection_ids or not isinstance(collection_ids, list):
             return (
-                jsonify({"status": "error", "message": "Package collection not found"}),
-                404,
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "collection_ids must be a non-empty list",
+                    }
+                ),
+                400,
             )
 
-        country_id = request.form.get("country_id")
-        name = request.form.get("name")
-        description = request.form.get("description")
-        image_file = request.files.get("image")
-        show_on_home = request.form.get("show_on_home")
-        home_index = request.form.get("home_index")
+        deleted, not_found = [], []
 
-        if country_id:
-            country = Country.query.get(country_id)
-            if not country:
-                return jsonify({"status": "error", "message": "Country not found"}), 404
-            collection.country_id = int(country_id)
+        for cid in collection_ids:
+            collection = PackageCollection.query.get(cid)
+            if not collection:
+                not_found.append(cid)
+                continue
 
-        if name:
-            collection.name = name
-
-        if description is not None:
-            collection.description = description
-
-        if show_on_home is not None:
-            collection.show_on_home = show_on_home.lower() == "true"
-
-        if home_index is not None:
-            try:
-                collection.home_index = int(home_index)
-            except (ValueError, TypeError):
-                return (
-                    jsonify(
-                        {"status": "error", "message": "home_index must be an integer"}
-                    ),
-                    400,
-                )
-
-        if image_file:
             if collection.image:
                 public_id = "/".join(collection.image.split("/")[-2:]).rsplit(".", 1)[0]
                 delete_images({"public_id": public_id})
-            uploaded, error = upload_images(image_file, folder="package-collections")
-            if error:
-                return jsonify({"status": "error", "message": error}), 400
-            collection.image = uploaded[0]["url"]
+
+            for package in collection.packages:
+                if package.image:
+                    delete_images(package.image, folder="packages")
+
+            db.session.delete(collection)
+            deleted.append(cid)
 
         db.session.commit()
 
@@ -970,16 +942,9 @@ def edit_package_collection(collection_id):
             jsonify(
                 {
                     "status": "success",
-                    "message": "Package collection updated successfully",
-                    "data": {
-                        "id": collection.id,
-                        "name": collection.name,
-                        "description": collection.description,
-                        "image": collection.image,
-                        "country_id": collection.country_id,
-                        "show_on_home": collection.show_on_home,
-                        "home_index": collection.home_index,
-                    },
+                    "message": f"{len(deleted)} collection(s) deleted successfully",
+                    "deleted": deleted,
+                    "not_found": not_found,
                 }
             ),
             200,
@@ -1028,10 +993,9 @@ def delete_package_collection(collection_id):
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# ADD multiple packages to collection
-@adminBP.route("/package-collection/<int:collection_id>/add-packages", methods=["POST"])
+@adminBP.route("/package-collection/<int:collection_id>", methods=["PUT"])
 @middleware
-def add_packages_to_collection(collection_id):
+def edit_package_collection(collection_id):
     try:
         collection = PackageCollection.query.get(collection_id)
         if not collection:
@@ -1040,106 +1004,121 @@ def add_packages_to_collection(collection_id):
                 404,
             )
 
-        data = request.get_json()
-        package_ids = data.get("package_ids", [])
+        name = request.form.get("name")
+        description = request.form.get("description")
+        image_file = request.files.get("image")
+        show_on_home = request.form.get("show_on_home")
+        home_index = request.form.get("home_index")
+        country_id_raw = request.form.get("country_id")  # '' = unlink, None = not sent
 
-        if not package_ids or not isinstance(package_ids, list):
-            return (
-                jsonify(
-                    {
-                        "status": "error",
-                        "message": "package_ids must be a non-empty list",
-                    }
-                ),
-                400,
-            )
+        if name:
+            collection.name = name
 
-        added, skipped, not_found = [], [], []
+        if description is not None:
+            collection.description = description
 
-        for pid in package_ids:
+        if show_on_home is not None:
+            collection.show_on_home = show_on_home.lower() == "true"
+
+        if home_index is not None:
+            try:
+                collection.home_index = int(home_index)
+            except (ValueError, TypeError):
+                return (
+                    jsonify(
+                        {"status": "error", "message": "home_index must be an integer"}
+                    ),
+                    400,
+                )
+
+        if country_id_raw is not None:
+            if country_id_raw == "" or country_id_raw.lower() == "null":
+                collection.country_id = None
+            else:
+                try:
+                    new_country_id = int(country_id_raw)
+                    country = Country.query.get(new_country_id)
+                    if not country:
+                        return (
+                            jsonify(
+                                {"status": "error", "message": "Country not found"}
+                            ),
+                            404,
+                        )
+                    collection.country_id = new_country_id
+                except (ValueError, TypeError):
+                    return (
+                        jsonify({"status": "error", "message": "Invalid country_id"}),
+                        400,
+                    )
+
+        if image_file:
+            if collection.image:
+                public_id = "/".join(collection.image.split("/")[-2:]).rsplit(".", 1)[0]
+                delete_images({"public_id": public_id})
+            uploaded, error = upload_images(image_file, folder="package-collections")
+            if error:
+                return jsonify({"status": "error", "message": error}), 400
+            collection.image = uploaded[0]["url"]
+
+
+        added, skipped_add, not_found_add = [], [], []
+        removed, skipped_remove, not_found_remove = [], [], []
+
+        body = request.get_json(silent=True) or {}
+        add_ids = body.get("add_package_ids", [])
+        remove_ids = body.get("remove_package_ids", [])
+
+        for pid in add_ids:
             package = Package.query.get(pid)
             if not package:
-                not_found.append(pid)
+                not_found_add.append(pid)
             elif package.package_collection_id == collection_id:
-                skipped.append(pid)
+                skipped_add.append(pid)
             else:
                 package.package_collection_id = collection_id
                 added.append(pid)
 
-        db.session.commit()
-
-        return (
-            jsonify(
-                {
-                    "status": "success",
-                    "message": f"{len(added)} package(s) added to collection '{collection.name}'",
-                    "added": added,
-                    "skipped_already_in_collection": skipped,
-                    "not_found": not_found,
-                }
-            ),
-            200,
-        )
-
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-
-# REMOVE multiple packages from collection
-@adminBP.route(
-    "/package-collection/<int:collection_id>/remove-packages", methods=["DELETE"]
-)
-@middleware
-def remove_packages_from_collection(collection_id):
-    try:
-        collection = PackageCollection.query.get(collection_id)
-        if not collection:
-            return (
-                jsonify({"status": "error", "message": "Package collection not found"}),
-                404,
-            )
-
-        data = request.get_json()
-        package_ids = data.get("package_ids", [])
-
-        if not package_ids or not isinstance(package_ids, list):
-            return (
-                jsonify(
-                    {
-                        "status": "error",
-                        "message": "package_ids must be a non-empty list",
-                    }
-                ),
-                400,
-            )
-
-        removed, skipped, not_found = [], [], []
-
-        for pid in package_ids:
+        for pid in remove_ids:
             package = Package.query.get(pid)
             if not package:
-                not_found.append(pid)
+                not_found_remove.append(pid)
             elif package.package_collection_id != collection_id:
-                skipped.append(pid)
+                skipped_remove.append(pid)
             else:
                 package.package_collection_id = None
                 removed.append(pid)
 
         db.session.commit()
 
-        return (
-            jsonify(
-                {
-                    "status": "success",
-                    "message": f"{len(removed)} package(s) removed from collection '{collection.name}'",
-                    "removed": removed,
-                    "skipped_not_in_collection": skipped,
-                    "not_found": not_found,
-                }
-            ),
-            200,
-        )
+        response = {
+            "status": "success",
+            "message": "Package collection updated successfully",
+            "data": {
+                "id": collection.id,
+                "name": collection.name,
+                "description": collection.description,
+                "image": collection.image,
+                "country_id": collection.country_id,
+                "show_on_home": collection.show_on_home,
+                "home_index": collection.home_index,
+            },
+        }
+
+        if add_ids:
+            response["packages_added"] = {
+                "added": added,
+                "skipped": skipped_add,
+                "not_found": not_found_add,
+            }
+        if remove_ids:
+            response["packages_removed"] = {
+                "removed": removed,
+                "skipped": skipped_remove,
+                "not_found": not_found_remove,
+            }
+
+        return jsonify(response), 200
 
     except Exception as e:
         db.session.rollback()
