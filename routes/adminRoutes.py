@@ -1061,7 +1061,6 @@ def edit_package_collection(collection_id):
                 return jsonify({"status": "error", "message": error}), 400
             collection.image = uploaded[0]["url"]
 
-
         added, skipped_add, not_found_add = [], [], []
         removed, skipped_remove, not_found_remove = [], [], []
 
@@ -1240,12 +1239,50 @@ def create_package():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# GET all packages
+# GET all packages  - need pagination and filter
 @adminBP.route("/package", methods=["GET"])
 @middleware
 def get_packages():
     try:
-        packages = Package.query.all()
+        page = request.args.get("page", 1, type=int)
+        per_page = min(request.args.get("per_page", 10, type=int), 100)
+        search = request.args.get("search", "").strip()
+        collection_id = request.args.get("collection_id", type=int)
+        min_price = request.args.get("min_price", type=float)
+        max_price = request.args.get("max_price", type=float)
+        sort_by = request.args.get("sort_by", "id")
+        order = request.args.get("order", "desc")
+
+        query = Package.query
+
+        if search:
+            query = query.filter(
+                db.or_(
+                    Package.name.ilike(f"%{search}%"),
+                    Package.description.ilike(f"%{search}%"),
+                )
+            )
+
+        if collection_id is not None:
+            query = query.filter(Package.package_collection_id == collection_id)
+
+        if min_price is not None:
+            query = query.filter(Package.discount_price >= min_price)
+
+        if max_price is not None:
+            query = query.filter(Package.discount_price <= max_price)
+
+        sort_map = {
+            "id": Package.id,
+            "name": Package.name,
+            "price": Package.discount_price,
+            "total_price": Package.total_price,
+        }
+        sort_col = sort_map.get(sort_by, Package.id)
+        query = query.order_by(sort_col.asc() if order == "asc" else sort_col.desc())
+
+        total = query.count()
+        packages = query.offset((page - 1) * per_page).limit(per_page).all()
 
         return (
             jsonify(
@@ -1298,6 +1335,14 @@ def get_packages():
                         }
                         for p in packages
                     ],
+                    "pagination": {
+                        "page": page,
+                        "per_page": per_page,
+                        "total": total,
+                        "pages": (total + per_page - 1) // per_page,
+                        "has_prev": page > 1,
+                        "has_next": page * per_page < total,
+                    },
                 }
             ),
             200,
