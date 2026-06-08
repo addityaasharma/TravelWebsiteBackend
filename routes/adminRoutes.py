@@ -1126,7 +1126,8 @@ def edit_package_collection(collection_id):
 @middleware
 def create_package():
     try:
-        package_collection_id = request.form.get("package_collection_id")
+        # Accept one or more collection IDs (comma-separated or JSON array)
+        collection_ids_raw = request.form.get("collection_ids")  # "1,2,3" or "[1,2,3]"
         name = request.form.get("name")
         description = request.form.get("description")
         total_price = request.form.get("total_price")
@@ -1135,10 +1136,13 @@ def create_package():
         image_files = request.files.getlist("images")
         days_data = request.form.get("days")
 
-        if not package_collection_id:
+        if not collection_ids_raw:
             return (
                 jsonify(
-                    {"status": "error", "message": "Package collection ID is required"}
+                    {
+                        "status": "error",
+                        "message": "At least one collection ID is required",
+                    }
                 ),
                 400,
             )
@@ -1155,12 +1159,48 @@ def create_package():
                 400,
             )
 
-        collection = PackageCollection.query.get(package_collection_id)
-        if not collection:
+        # Parse collection IDs — support both "1,2,3" and "[1,2,3]"
+        try:
+            if collection_ids_raw.startswith("["):
+                collection_ids = json.loads(collection_ids_raw)
+            else:
+                collection_ids = [
+                    int(x.strip()) for x in collection_ids_raw.split(",") if x.strip()
+                ]
+        except (ValueError, json.JSONDecodeError):
             return (
-                jsonify({"status": "error", "message": "Package collection not found"}),
-                404,
+                jsonify(
+                    {"status": "error", "message": "Invalid collection_ids format"}
+                ),
+                400,
             )
+
+        if not collection_ids:
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "At least one valid collection ID is required",
+                    }
+                ),
+                400,
+            )
+
+        # Validate all collections exist
+        collections = []
+        for cid in collection_ids:
+            collection = PackageCollection.query.get(cid)
+            if not collection:
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": f"Package collection {cid} not found",
+                        }
+                    ),
+                    404,
+                )
+            collections.append(collection)
 
         uploaded_images = None
         if image_files:
@@ -1171,16 +1211,16 @@ def create_package():
         days_list = json.loads(days_data) if days_data else []
 
         package = Package(
-            package_collection_id=int(package_collection_id),
             name=name,
             description=description,
             total_price=float(total_price),
             discount_price=float(discount_price),
             person=int(person),
             image=uploaded_images,
+            collections=collections,  # many-to-many assignment
         )
         db.session.add(package)
-        db.session.flush()  # get package.id before committing
+        db.session.flush()
 
         for day_data in days_list:
             package_day = PackageDays(
@@ -1225,6 +1265,9 @@ def create_package():
                         "discount_price": package.discount_price,
                         "person": package.person,
                         "image": package.image,
+                        "collections": [
+                            {"id": c.id, "name": c.name} for c in package.collections
+                        ],
                     },
                 }
             ),
@@ -1236,7 +1279,7 @@ def create_package():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# GET all packages  - need pagination and filter
+# GET all packages
 @adminBP.route("/package", methods=["GET"])
 @middleware
 def get_packages():
@@ -1260,12 +1303,14 @@ def get_packages():
                 )
             )
 
+        # Filter by collection using the association table
         if collection_id is not None:
-            query = query.filter(Package.package_collection_id == collection_id)
+            query = query.filter(
+                Package.collections.any(PackageCollection.id == collection_id)
+            )
 
         if min_price is not None:
             query = query.filter(Package.discount_price >= min_price)
-
         if max_price is not None:
             query = query.filter(Package.discount_price <= max_price)
 
@@ -1294,7 +1339,9 @@ def get_packages():
                             "discount_price": p.discount_price,
                             "person": p.person,
                             "image": p.image,
-                            "package_collection_id": p.package_collection_id,
+                            "collections": [
+                                {"id": c.id, "name": c.name} for c in p.collections
+                            ],
                             "reviews": [
                                 {
                                     "id": r.id,
@@ -1349,6 +1396,7 @@ def get_packages():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+# GET single package
 @adminBP.route("/package/<int:package_id>", methods=["GET"])
 @middleware
 def get_package(package_id):
@@ -1369,7 +1417,9 @@ def get_package(package_id):
                         "discount_price": package.discount_price,
                         "person": package.person,
                         "image": package.image,
-                        "package_collection_id": package.package_collection_id,
+                        "collections": [
+                            {"id": c.id, "name": c.name} for c in package.collections
+                        ],
                         "reviews": [
                             {
                                 "id": r.id,
@@ -1414,6 +1464,7 @@ def get_package(package_id):
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+# UPDATE package
 @adminBP.route("/package/<int:package_id>", methods=["PUT"])
 @middleware
 def update_package(package_id):
@@ -1422,7 +1473,7 @@ def update_package(package_id):
         if not package:
             return jsonify({"status": "error", "message": "Package not found"}), 404
 
-        package_collection_id = request.form.get("package_collection_id")
+        collection_ids_raw = request.form.get("collection_ids")
         name = request.form.get("name")
         description = request.form.get("description")
         total_price = request.form.get("total_price")
@@ -1431,16 +1482,51 @@ def update_package(package_id):
         image_files = request.files.getlist("images")
         days_data = request.form.get("days")
 
-        if package_collection_id:
-            collection = PackageCollection.query.get(package_collection_id)
-            if not collection:
+        # Update collections if provided
+        if collection_ids_raw:
+            try:
+                if collection_ids_raw.startswith("["):
+                    collection_ids = json.loads(collection_ids_raw)
+                else:
+                    collection_ids = [
+                        int(x.strip())
+                        for x in collection_ids_raw.split(",")
+                        if x.strip()
+                    ]
+            except (ValueError, json.JSONDecodeError):
                 return (
                     jsonify(
-                        {"status": "error", "message": "Package collection not found"}
+                        {"status": "error", "message": "Invalid collection_ids format"}
                     ),
-                    404,
+                    400,
                 )
-            package.package_collection_id = int(package_collection_id)
+
+            if not collection_ids:
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": "At least one collection ID is required",
+                        }
+                    ),
+                    400,
+                )
+
+            collections = []
+            for cid in collection_ids:
+                collection = PackageCollection.query.get(cid)
+                if not collection:
+                    return (
+                        jsonify(
+                            {
+                                "status": "error",
+                                "message": f"Package collection {cid} not found",
+                            }
+                        ),
+                        404,
+                    )
+                collections.append(collection)
+            package.collections = collections  # replaces all existing associations
 
         if name:
             package.name = name
@@ -1456,16 +1542,13 @@ def update_package(package_id):
         if image_files and any(f.filename for f in image_files):
             if package.image:
                 delete_images(package.image)
-
             uploaded_images, error = upload_images(image_files, folder="packages")
             if error:
                 return jsonify({"status": "error", "message": error}), 400
-
             package.image = uploaded_images
 
         if days_data:
             days_list = json.loads(days_data)
-
             package.days.clear()
             db.session.flush()
 
@@ -1487,7 +1570,6 @@ def update_package(package_id):
                             description=activity.get("description"),
                         )
                     )
-
                 for desc in day_data.get("day_description", []):
                     db.session.add(
                         DaysDescription(
@@ -1512,6 +1594,9 @@ def update_package(package_id):
                         "discount_price": package.discount_price,
                         "person": package.person,
                         "image": package.image,
+                        "collections": [
+                            {"id": c.id, "name": c.name} for c in package.collections
+                        ],
                     },
                 }
             ),
@@ -1523,6 +1608,7 @@ def update_package(package_id):
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+# DELETE package
 @adminBP.route("/package/<int:package_id>", methods=["DELETE"])
 @middleware
 def delete_package(package_id):
@@ -1538,12 +1624,7 @@ def delete_package(package_id):
         db.session.commit()
 
         return (
-            jsonify(
-                {
-                    "status": "success",
-                    "message": "Package deleted successfully",
-                }
-            ),
+            jsonify({"status": "success", "message": "Package deleted successfully"}),
             200,
         )
 
@@ -1738,15 +1819,13 @@ def delete_review(review_id):
 @middleware
 def get_dashboard():
     try:
-
-        # ---- Overview counts ----
         total_countries = Country.query.count()
         total_collections = PackageCollection.query.count()
         total_packages = Package.query.count()
         total_enquiries = Form.query.count()
         total_reviews = Review.query.count()
 
-        # ---- Top 5 packages by enquiries ----
+        # Top 5 packages by enquiries
         top_packages_by_enquiries = (
             db.session.query(
                 Package.id,
@@ -1763,7 +1842,7 @@ def get_dashboard():
             .all()
         )
 
-        # ---- Top 5 packages by average rating ----
+        # Top 5 packages by average rating
         top_packages_by_rating = (
             db.session.query(
                 Package.id,
@@ -1782,7 +1861,7 @@ def get_dashboard():
             .all()
         )
 
-        # ---- Top 5 packages by reviews count ----
+        # Top 5 packages by reviews count
         top_packages_by_reviews = (
             db.session.query(
                 Package.id,
@@ -1799,7 +1878,8 @@ def get_dashboard():
             .all()
         )
 
-        # ---- Top 5 countries by package count ----
+        # ── FIXED: Top 5 countries by package count ──
+        # Use the association table instead of Package.package_collection_id
         top_countries = (
             db.session.query(
                 Country.id,
@@ -1808,14 +1888,21 @@ def get_dashboard():
                 db.func.count(Package.id).label("total_packages"),
             )
             .outerjoin(PackageCollection, PackageCollection.country_id == Country.id)
-            .outerjoin(Package, Package.package_collection_id == PackageCollection.id)
+            .outerjoin(
+                package_collection_association,
+                package_collection_association.c.package_collection_id
+                == PackageCollection.id,
+            )
+            .outerjoin(
+                Package, Package.id == package_collection_association.c.package_id
+            )
             .group_by(Country.id)
             .order_by(db.func.count(Package.id).desc())
             .limit(5)
             .all()
         )
 
-        # ---- Top 5 collections by package count ----
+        # ── FIXED: Top 5 collections by package count ──
         top_collections = (
             db.session.query(
                 PackageCollection.id,
@@ -1824,20 +1911,27 @@ def get_dashboard():
                 PackageCollection.country_id,
                 db.func.count(Package.id).label("total_packages"),
             )
-            .outerjoin(Package, Package.package_collection_id == PackageCollection.id)
+            .outerjoin(
+                package_collection_association,
+                package_collection_association.c.package_collection_id
+                == PackageCollection.id,
+            )
+            .outerjoin(
+                Package, Package.id == package_collection_association.c.package_id
+            )
             .group_by(PackageCollection.id)
             .order_by(db.func.count(Package.id).desc())
             .limit(5)
             .all()
         )
 
-        # ---- Recent 5 enquiries ----
+        # Recent 5 enquiries
         recent_enquiries = Form.query.order_by(Form.id.desc()).limit(5).all()
 
-        # ---- Recent 5 reviews ----
+        # Recent 5 reviews
         recent_reviews = Review.query.order_by(Review.id.desc()).limit(5).all()
 
-        # ---- Star rating distribution (across all packages) ----
+        # Star rating distribution
         star_distribution = (
             db.session.query(Review.star, db.func.count(Review.id).label("count"))
             .group_by(Review.star)
@@ -1845,7 +1939,7 @@ def get_dashboard():
             .all()
         )
 
-        # ---- Packages with no enquiries (underperforming) ----
+        # Packages with no enquiries
         no_enquiry_packages = (
             db.session.query(Package)
             .outerjoin(Form, Form.package_id == Package.id)
@@ -1860,7 +1954,6 @@ def get_dashboard():
                 {
                     "status": "success",
                     "data": {
-                        # --- Overview ---
                         "overview": {
                             "total_countries": total_countries,
                             "total_collections": total_collections,
@@ -1868,7 +1961,6 @@ def get_dashboard():
                             "total_enquiries": total_enquiries,
                             "total_reviews": total_reviews,
                         },
-                        # --- Top performing packages ---
                         "top_packages_by_enquiries": [
                             {
                                 "id": p.id,
@@ -1906,7 +1998,6 @@ def get_dashboard():
                             }
                             for p in top_packages_by_reviews
                         ],
-                        # --- Top countries and collections ---
                         "top_countries": [
                             {
                                 "id": c.id,
@@ -1926,7 +2017,6 @@ def get_dashboard():
                             }
                             for c in top_collections
                         ],
-                        # --- Recent activity ---
                         "recent_enquiries": [
                             {
                                 "id": f.id,
@@ -1954,12 +2044,8 @@ def get_dashboard():
                             }
                             for r in recent_reviews
                         ],
-                        # --- Insights ---
                         "star_distribution": [
-                            {
-                                "star": s.star,
-                                "count": s.count,
-                            }
+                            {"star": s.star, "count": s.count}
                             for s in star_distribution
                         ],
                         "underperforming_packages": [
