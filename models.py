@@ -1,6 +1,23 @@
 from config.extension import db
 from sqlalchemy.dialects.postgresql import JSON
 
+# ── Association table (many-to-many) ─────────────────────────────────────────
+package_collection_association = db.Table(
+    "package_collection_association",
+    db.Column(
+        "package_id",
+        db.Integer,
+        db.ForeignKey("package.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    db.Column(
+        "package_collection_id",
+        db.Integer,
+        db.ForeignKey("package_collection.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+)
+
 
 class Admin(db.Model):
     __tablename__ = "admin"
@@ -29,6 +46,7 @@ class Form(db.Model):
     email = db.Column(db.String(255))
     phoneNumber = db.Column(db.String(20), nullable=False)
     message = db.Column(db.String(255))
+    enquiry_type = db.Column(db.String(100), nullable=True)
     package = db.relationship("Package", back_populates="forms")
 
 
@@ -56,25 +74,27 @@ class PackageCollection(db.Model):
     image = db.Column(db.String(255), nullable=False)
     country = db.relationship("Country", back_populates="package_collections")
     packages = db.relationship(
-        "Package", back_populates="package_collection", cascade="all, delete-orphan"
+        "Package",
+        secondary=package_collection_association,
+        back_populates="collections",
     )
 
 
 class Package(db.Model):
     __tablename__ = "package"
     id = db.Column(db.Integer, primary_key=True)
-    package_collection_id = db.Column(
-        db.Integer,
-        db.ForeignKey("package_collection.id", ondelete="cascade"),
-        nullable=False,
-    )
+    # Removed: package_collection_id FK — now using many-to-many via association table
     name = db.Column(db.String(255), nullable=False)
     description = db.Column(db.Text, nullable=True)
     total_price = db.Column(db.Float, nullable=False)
     discount_price = db.Column(db.Float, nullable=False)
     person = db.Column(db.Integer, default=1)
     image = db.Column(JSON, nullable=True)
-    package_collection = db.relationship("PackageCollection", back_populates="packages")
+    collections = db.relationship(
+        "PackageCollection",
+        secondary=package_collection_association,
+        back_populates="packages",
+    )
     days = db.relationship(
         "PackageDays",
         uselist=True,

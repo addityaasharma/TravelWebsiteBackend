@@ -717,11 +717,11 @@ def get_package_collections():
         page = request.args.get("page", 1, type=int)
         per_page = min(request.args.get("per_page", 10, type=int), 100)
         search = request.args.get("search", "").strip()
-        country_id = request.args.get("country_id", type=int)  # filter by country
-        show_on_home = request.args.get("show_on_home")  # "true" | "false"
-        sort_by = request.args.get("sort_by", "id")  # id | name | home_index
-        order = request.args.get("order", "desc")  # asc | desc
-        no_country = request.args.get("no_country")  # "true" → unlinked only
+        country_id = request.args.get("country_id", type=int)
+        show_on_home = request.args.get("show_on_home")
+        sort_by = request.args.get("sort_by", "id")
+        order = request.args.get("order", "desc")
+        no_country = request.args.get("no_country")
 
         query = PackageCollection.query
 
@@ -732,13 +732,10 @@ def get_package_collections():
                     PackageCollection.description.ilike(f"%{search}%"),
                 )
             )
-
         if country_id is not None:
             query = query.filter(PackageCollection.country_id == country_id)
-
         if no_country and no_country.lower() == "true":
             query = query.filter(PackageCollection.country_id.is_(None))
-
         if show_on_home is not None:
             query = query.filter(
                 PackageCollection.show_on_home == (show_on_home.lower() == "true")
@@ -832,6 +829,9 @@ def get_package_collection(collection_id):
                                 "discount_price": p.discount_price,
                                 "person": p.person,
                                 "image": p.image,
+                                "collections": [
+                                    {"id": c.id, "name": c.name} for c in p.collections
+                                ],
                                 "reviews": [
                                     {
                                         "id": r.id,
@@ -909,9 +909,12 @@ def delete_package_collections():
                 public_id = "/".join(collection.image.split("/")[-2:]).rsplit(".", 1)[0]
                 delete_images({"public_id": public_id})
 
-            for package in collection.packages:
-                if package.image:
-                    delete_images(package.image, folder="packages")
+            for package in list(collection.packages):
+                remaining = [c for c in package.collections if c.id != cid]
+                if not remaining:
+                    if package.image:
+                        delete_images(package.image, folder="packages")
+                    db.session.delete(package)
 
             db.session.delete(collection)
             deleted.append(cid)
@@ -935,7 +938,6 @@ def delete_package_collections():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# DELETE single package collection
 @adminBP.route("/package-collection/<int:collection_id>", methods=["DELETE"])
 @middleware
 def delete_package_collection(collection_id):
@@ -951,9 +953,12 @@ def delete_package_collection(collection_id):
             public_id = "/".join(collection.image.split("/")[-2:]).rsplit(".", 1)[0]
             delete_images({"public_id": public_id})
 
-        for package in collection.packages:
-            if package.image:
-                delete_images(package.image, folder="packages")
+        for package in list(collection.packages):
+            remaining = [c for c in package.collections if c.id != collection_id]
+            if not remaining:
+                if package.image:
+                    delete_images(package.image, folder="packages")
+                db.session.delete(package)
 
         db.session.delete(collection)
         db.session.commit()
@@ -989,17 +994,14 @@ def edit_package_collection(collection_id):
         image_file = request.files.get("image")
         show_on_home = request.form.get("show_on_home")
         home_index = request.form.get("home_index")
-        country_id_raw = request.form.get("country_id")  # '' = unlink, None = not sent
+        country_id_raw = request.form.get("country_id")
 
         if name:
             collection.name = name
-
         if description is not None:
             collection.description = description
-
         if show_on_home is not None:
             collection.show_on_home = show_on_home.lower() == "true"
-
         if home_index is not None:
             try:
                 collection.home_index = int(home_index)
@@ -1043,29 +1045,43 @@ def edit_package_collection(collection_id):
 
         added, skipped_add, not_found_add = [], [], []
         removed, skipped_remove, not_found_remove = [], [], []
+        blocked_remove = (
+            []
+        )  # packages that couldn't be removed (only 1 collection left)
 
         body = request.get_json(silent=True) or {}
         add_ids = body.get("add_package_ids", [])
         remove_ids = body.get("remove_package_ids", [])
 
+        # ── Add packages to this collection ──────────────────────────────────
         for pid in add_ids:
             package = Package.query.get(pid)
             if not package:
                 not_found_add.append(pid)
-            elif package.package_collection_id == collection_id:
+            elif collection in package.collections:
                 skipped_add.append(pid)
             else:
-                package.package_collection_id = collection_id
+                package.collections.append(collection)
                 added.append(pid)
 
+        # ── Remove packages from this collection ──────────────────────────────
         for pid in remove_ids:
             package = Package.query.get(pid)
             if not package:
                 not_found_remove.append(pid)
-            elif package.package_collection_id != collection_id:
+            elif collection not in package.collections:
                 skipped_remove.append(pid)
+            elif len(package.collections) <= 1:
+                # Guard: must stay in at least one collection
+                blocked_remove.append(
+                    {
+                        "id": pid,
+                        "name": package.name,
+                        "reason": "Package must belong to at least one collection",
+                    }
+                )
             else:
-                package.package_collection_id = None
+                package.collections.remove(collection)
                 removed.append(pid)
 
         db.session.commit()
@@ -1095,6 +1111,7 @@ def edit_package_collection(collection_id):
                 "removed": removed,
                 "skipped": skipped_remove,
                 "not_found": not_found_remove,
+                "blocked": blocked_remove,  # packages that couldn't be removed
             }
 
         return jsonify(response), 200
