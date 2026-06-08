@@ -65,28 +65,21 @@ def signup():
             algorithm="HS256",
         )
 
-        response = jsonify(
-            {
-                "status": "success",
-                "message": "Admin created successfully",
-                "admin": {
-                    "id": new_admin.id,
-                    "fullname": new_admin.fullname,
-                    "email": new_admin.email,
-                },
-            }
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "message": "Admin created successfully",
+                    "token": token,
+                    "admin": {
+                        "id": new_admin.id,
+                        "fullname": new_admin.fullname,
+                        "email": new_admin.email,
+                    },
+                }
+            ),
+            201,
         )
-
-        response.set_cookie(
-            "user_auth_token",
-            token,
-            httponly=True,
-            secure=False,
-            samesite="Lax",
-            max_age=7 * 24 * 60 * 60,
-        )
-
-        return response, 201
 
     except Exception as e:
         db.session.rollback()
@@ -99,6 +92,7 @@ def login():
         data = request.get_json()
         email = data.get("email")
         password = data.get("password")
+
         if not email or not password:
             return (
                 jsonify(
@@ -129,28 +123,21 @@ def login():
             algorithm="HS256",
         )
 
-        response = jsonify(
-            {
-                "status": "success",
-                "message": "Login successful",
-                "admin": {
-                    "id": admin.id,
-                    "fullname": admin.fullname,
-                    "email": admin.email,
-                },
-            }
+        return (
+            jsonify(
+                {
+                    "status": "success",
+                    "message": "Login successful",
+                    "token": token,
+                    "admin": {
+                        "id": admin.id,
+                        "fullname": admin.fullname,
+                        "email": admin.email,
+                    },
+                }
+            ),
+            200,
         )
-
-        response.set_cookie(
-            "user_auth_token",
-            token,
-            httponly=True,
-            secure=False,
-            samesite="Lax",
-            max_age=7 * 24 * 60 * 60,
-        )
-
-        return response, 200
 
     except Exception as e:
         return jsonify({"status": "error", "message": "Failed to login"}), 500
@@ -160,14 +147,7 @@ def login():
 @middleware
 def logout():
     try:
-        response = jsonify({"status": "success", "message": "Logged out successfully"})
-        response.delete_cookie(
-            "user_auth_token",
-            httponly=True,
-            secure=False,
-            samesite="Lax",
-        )
-        return response, 200
+        return jsonify({"status": "success", "message": "Logged out successfully"}), 200
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500

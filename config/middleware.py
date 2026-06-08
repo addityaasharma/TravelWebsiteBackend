@@ -9,13 +9,18 @@ from werkzeug.utils import secure_filename
 def middleware(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        token = request.cookies.get("user_auth_token")
+        auth_header = request.headers.get("Authorization", "")
+        token = (
+            auth_header.replace("Bearer ", "").strip()
+            if auth_header.startswith("Bearer ")
+            else None
+        )
+
         if not token:
             return jsonify({"status": "error", "message": "Unauthorized"}), 401
 
         try:
             decoded = jwt.decode(token, os.getenv("SECRET_KEY"), algorithms=["HS256"])
-
             user = Admin.query.get(decoded["userID"])
             if not user:
                 return jsonify({"status": "error", "message": "User not found"}), 404
