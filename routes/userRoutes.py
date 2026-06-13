@@ -637,7 +637,6 @@ def home():
         )
 
 
-# ── FIXED: suggested packages — uses collections (many-to-many) ───────────────
 @userBP.route("/packages/<int:package_id>/suggested", methods=["GET"])
 def get_suggested_packages(package_id):
     try:
@@ -651,8 +650,7 @@ def get_suggested_packages(package_id):
         # 1. Same collections, excluding current package
         for collection in package.collections:
             same_collection_pkgs = [
-                p
-                for p in collection.packages
+                p for p in collection.packages
                 if p.id != package_id and p.id not in suggested_ids
             ]
             for p in same_collection_pkgs:
@@ -665,25 +663,29 @@ def get_suggested_packages(package_id):
         if len(suggested) < 16:
             country_ids = {c.country_id for c in package.collections if c.country_id}
             if country_ids:
-                same_country = (
-                    Package.query.join(
+                # FIX: use subquery on ID only (avoids DISTINCT on JSON column)
+                id_subquery = (
+                    db.session.query(Package.id)
+                    .join(
                         package_collection_association,
                         Package.id == package_collection_association.c.package_id,
                     )
                     .join(
                         PackageCollection,
-                        PackageCollection.id
-                        == package_collection_association.c.package_collection_id,
+                        PackageCollection.id == package_collection_association.c.package_collection_id,
                     )
                     .filter(
                         PackageCollection.country_id.in_(country_ids),
                         Package.id != package_id,
-                        Package.id.notin_(suggested_ids),
+                        Package.id.notin_(suggested_ids) if suggested_ids else True,
                     )
-                    .distinct()
+                    .distinct()   # DISTINCT on integer ID only — safe, no JSON
                     .limit(16 - len(suggested))
-                    .all()
+                    .subquery()
                 )
+
+                same_country = Package.query.filter(Package.id.in_(id_subquery)).all()
+
                 for p in same_country:
                     suggested_ids.add(p.id)
                 suggested.extend(same_country)
@@ -692,7 +694,8 @@ def get_suggested_packages(package_id):
         if len(suggested) < 16:
             others = (
                 Package.query.filter(
-                    Package.id != package_id, Package.id.notin_(suggested_ids)
+                    Package.id != package_id,
+                    Package.id.notin_(suggested_ids) if suggested_ids else True,
                 )
                 .limit(16 - len(suggested))
                 .all()
@@ -700,11 +703,7 @@ def get_suggested_packages(package_id):
             suggested.extend(others)
 
         def fmt(p):
-            avg = (
-                round(sum(r.star for r in p.reviews) / len(p.reviews), 1)
-                if p.reviews
-                else 0
-            )
+            avg = round(sum(r.star for r in p.reviews) / len(p.reviews), 1) if p.reviews else 0
             return {
                 "id": p.id,
                 "name": p.name,
@@ -715,7 +714,6 @@ def get_suggested_packages(package_id):
                 "image": p.image,
                 "average_rating": avg,
                 "total_reviews": len(p.reviews),
-                # FIXED: replaced package_collection_id with collections list
                 "collections": [{"id": c.id, "name": c.name} for c in p.collections],
                 "days": [
                     {
@@ -728,9 +726,7 @@ def get_suggested_packages(package_id):
                 ],
             }
 
-        return (
-            jsonify({"status": "success", "data": [fmt(p) for p in suggested[:16]]}),
-            200,
-        )
+        return jsonify({"status": "success", "data": [fmt(p) for p in suggested[:16]]}), 200
+
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
