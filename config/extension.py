@@ -25,7 +25,7 @@ migrate = Migrate()
 jwt = JWTManager()
 # cors = CORS(resources={r"/*": {"origins": "*"}})
 limiter = Limiter(
-    key_func=get_remote_address, default_limits=["200 per day", "50 per hour"]
+    key_func=get_remote_address, default_limits=["500 per day", "100 per hour"]
 )
 cloudinary.config(
     cloud_name=os.environ.get("CLOUDINARY_CLOUD_NAME"),
